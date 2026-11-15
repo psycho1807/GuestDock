@@ -60,7 +60,9 @@ public class SessionAdapter extends RecyclerView.Adapter<SessionAdapter.VH> {
             boolean valid = s.isValid();
             tvStatus.setText(valid ? R.string.status_active : R.string.status_expired);
             tvStatus.setTextColor(itemView.getContext().getColor(valid ? R.color.green : R.color.red));
-            tvExpiry.setText(s.getExpiresAt().toString());
+            tvExpiry.setText(java.text.DateFormat.getDateTimeInstance(
+                    java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                    .format(new java.util.Date(s.getExpiresAt())));
             itemView.setOnClickListener(v -> listener.onClick(s));
         }
     }
