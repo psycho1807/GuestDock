@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Accès invité — {{HA_NAME}}</title>
+  <style>
+    :root {
+      --primary: #1565C0;
+      --accent: #FF6F00;
+      --bg: #0a0a1a;
+      --card: #12122a;
+      --text: #e8eaff;
+      --text-muted: #8080aa;
+      --border: #2a2a4a;
+      --on: #4CAF50;
+      --off: #555;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header .icon { font-size: 28px; }
+    header h1 { font-size: 18px; font-weight: 600; }
+    header small { color: var(--text-muted); font-size: 12px; display: block; }
+
+    main { padding: 16px; max-width: 600px; margin: 0 auto; }
+
+    h2 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--text-muted);
+      margin: 20px 0 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    .entity-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 12px;
+      cursor: pointer;
+      user-select: none;
+      transition: transform .1s, background .2s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      text-align: center;
+    }
+    .entity-card:active { transform: scale(.96); }
+    .entity-card.on { border-color: var(--on); background: #0d2b0d; }
+    .entity-card.loading { opacity: .6; pointer-events: none; }
+
+    .entity-icon { font-size: 32px; line-height: 1; }
+    .entity-name { font-size: 13px; line-height: 1.2; }
+    .entity-state { font-size: 11px; color: var(--text-muted); }
+    .entity-card.on .entity-state { color: var(--on); }
+
+    .brightness-row {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-top: 8px;
+    }
+    .brightness-row label { font-size: 13px; color: var(--text-muted); display: block; margin-bottom: 8px; }
+    input[type=range] { width: 100%; accent-color: var(--accent); }
+
+    #toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #222;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 14px;
+      transition: transform .3s;
+      pointer-events: none;
+      z-index: 100;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+
+    #error-banner {
+      background: #3a0000;
+      border: 1px solid #c62828;
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+      display: none;
+    }
+    #error-banner.show { display: block; }
+
+    .spinner {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="icon">🏠</span>
+  <div>
+    <h1>{{HA_NAME}}</h1>
+    <small>Accès invité temporaire</small>
+  </div>
+</header>
+
+<main>
+  <div id="error-banner">❌ Accès expiré ou invalide.</div>
+  <div id="content">
+    <div class="spinner">Chargement…</div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+// Token injected server-side
+const TOKEN = "{{GUEST_TOKEN}}";
+const BASE = "";  // same origin
+
+// ── API helpers ──────────────────────────────────────────────────────────────
+
+async function apiGet(path) {
+  const r = await fetch(BASE + path, {
+    headers: { "x-guest-token": TOKEN }
+  });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+async function apiCall(domain, service, entityId, extra = {}) {
+  const r = await fetch(BASE + "/api/guest/service", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-guest-token": TOKEN },
+    body: JSON.stringify({ domain, service, entity_id: entityId, ...extra })
+  });
+  if (!r.ok) throw new Error(r.status);
+}
+
+// ── State & render ───────────────────────────────────────────────────────────
+
+let states = {};
+
+function entityIcon(entityId, state) {
+  const domain = entityId.split(".")[0];
+  const on = state === "on" || state === "true" || Number(state) > 0;
+  const icons = {
+    light: on ? "💡" : "🔦",
+    switch: on ? "🔌" : "⬜",
+    climate: "🌡️",
+    media_player: "🎵",
+    cover: state === "open" ? "⬆️" : "⬇️",
+    fan: on ? "💨" : "🔵",
+    lock: state === "unlocked" ? "🔓" : "🔒",
+    sensor: "📊",
+    binary_sensor: on ? "🟢" : "⚫",
+    scene: "🎭",
+    script: "▶️",
+    automation: "⚙️",
+  };
+  return icons[domain] || "🔧";
+}
+
+function friendlyName(s) {
+  return (s.attributes && s.attributes.friendly_name) || s.entity_id.split(".")[1].replace(/_/g, " ");
+}
+
+function stateLabel(s) {
+  const on = ["on","open","unlocked","true","home"].includes(s.state);
+  if (s.state === "unavailable") return "indisponible";
+  if (s.state === "on") return "Allumé";
+  if (s.state === "off") return "Éteint";
+  return s.state;
+}
+
+function groupByDomain(stateList) {
+  const groups = {};
+  for (const s of stateList) {
+    const domain = s.entity_id.split(".")[0];
+    if (!groups[domain]) groups[domain];
+    (groups[domain] = groups[domain] || []).push(s);
+  }
+  return groups;
+}
+
+const DOMAIN_LABELS = {
+  light: "Lumières", switch: "Interrupteurs", climate: "Climatisation",
+  cover: "Volets", media_player: "Médias", fan: "Ventilateurs",
+  lock: "Serrures", scene: "Scènes", script: "Scripts",
+  sensor: "Capteurs", binary_sensor: "Capteurs binaires", automation: "Automatisations"
+};
+
+function render(stateList) {
+  const content = document.getElementById("content");
+  const groups  = groupByDomain(stateList);
+  let html = "";
+
+  for (const [domain, entities] of Object.entries(groups)) {
+    html += `<h2>${DOMAIN_LABELS[domain] || domain}</h2><div class="grid">`;
+    for (const s of entities) {
+      const on = ["on","open","unlocked"].includes(s.state);
+      const hasBrightness = domain === "light" && on && s.attributes && s.attributes.brightness != null;
+      html += `
+        <div class="entity-card ${on ? "on" : ""}" id="card-${s.entity_id.replace(".","-")}"
+             onclick="toggle('${s.entity_id}', '${domain}', ${on})"
+             data-entity="${s.entity_id}">
+          <span class="entity-icon">${entityIcon(s.entity_id, s.state)}</span>
+          <span class="entity-name">${friendlyName(s)}</span>
+          <span class="entity-state">${stateLabel(s)}</span>
+        </div>`;
+    }
+    html += "</div>";
+
+    // Brightness sliders for lights
+    for (const s of entities) {
+      if (domain === "light" && s.state === "on" && s.attributes && s.attributes.brightness != null) {
+        const pct = Math.round(s.attributes.brightness / 2.55);
+        html += `
+          <div class="brightness-row">
+            <label>Luminosité — ${friendlyName(s)}: <strong id="bval-${s.entity_id.replace(".","-")}">${pct}%</strong></label>
+            <input type="range" min="1" max="100" value="${pct}"
+              oninput="updateBrightness('${s.entity_id}', this.value)"
+              onchange="setBrightness('${s.entity_id}', this.value)"/>
+          </div>`;
+      }
+    }
+  }
+
+  if (!html) html = `<p style="color:var(--text-muted);text-align:center;padding:40px">Aucun appareil disponible.</p>`;
+  content.innerHTML = html;
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────────
+
+async function toggle(entityId, domain, currentlyOn) {
+  const cardId = "card-" + entityId.replace(".", "-");
+  const card = document.getElementById(cardId);
+  if (card) card.classList.add("loading");
+
+  let svc, extra = {};
+  if (["scene", "script", "automation"].includes(domain)) {
+    svc = domain === "scene" ? "turn_on" :
+          domain === "script" ? "turn_on" : "trigger";
+  } else {
+    svc = currentlyOn ? "turn_off" : "turn_on";
+  }
+
+  try {
+    await apiCall(domain, svc, entityId, extra);
+    toast("✓ Commande envoyée");
+    await loadStates(); // refresh
+  } catch (e) {
+    toast("⚠️ Erreur: " + e.message);
+    if (card) card.classList.remove("loading");
+  }
+}
+
+function updateBrightness(entityId, value) {
+  const id = entityId.replace(".", "-");
+  const el = document.getElementById("bval-" + id);
+  if (el) el.textContent = value + "%";
+}
+
+let bTimer = null;
+function setBrightness(entityId, value) {
+  clearTimeout(bTimer);
+  bTimer = setTimeout(async () => {
+    try {
+      await apiCall("light", "turn_on", entityId, { brightness_pct: parseInt(value) });
+    } catch(e) { toast("⚠️ Erreur lumière"); }
+  }, 300);
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+async function loadStates() {
+  try {
+    const list = await apiGet("/api/guest/states");
+    render(list);
+  } catch(e) {
+    if (e.message === "403" || e.message === "401") {
+      document.getElementById("error-banner").classList.add("show");
+      document.getElementById("content").innerHTML = "";
+    } else {
+      toast("⚠️ Impossible de charger les appareils");
+    }
+  }
+}
+
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 2500);
+}
+
+// Auto-refresh every 10 s
+loadStates();
+setInterval(loadStates, 10000);
+</script>
+</body>
+</html>
