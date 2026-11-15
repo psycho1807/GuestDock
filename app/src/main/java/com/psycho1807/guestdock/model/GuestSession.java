@@ -35,6 +35,13 @@ public class GuestSession {
         this.accessCount = 0;
     }
 
+    public GuestSession(String name, Profile profile, long durationMs) {
+        this();
+        this.name = name;
+        this.profile = profile;
+        this.expiresAt = this.createdAt + durationMs;
+    }
+
     // ── Getters / Setters ────────────────────────────────────────────────────
 
     public String getId() { return id; }

@@ -67,7 +67,9 @@ public class GuestSessionActivity extends AppCompatActivity {
 
         tvName.setText(session.getName());
         tvUrl.setText(guestUrl);
-        tvExpiry.setText(getString(R.string.expires_at, session.getExpiresAt().toString()));
+        java.text.DateFormat df = java.text.DateFormat.getDateTimeInstance(
+                java.text.DateFormat.SHORT, java.text.DateFormat.SHORT);
+        tvExpiry.setText(getString(R.string.expires_at, df.format(new java.util.Date(session.getExpiresAt()))));
         tvCount.setText(getString(R.string.access_count, session.getAccessCount()));
 
         boolean valid = session.isValid();

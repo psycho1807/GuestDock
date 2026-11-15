@@ -8,10 +8,7 @@ import com.psycho1807.guestdock.ha.HaClient;
 import com.psycho1807.guestdock.model.GuestSession;
 import com.psycho1807.guestdock.utils.SessionStore;
 
-import org.nanohttpd.protocols.http.IHTTPSession;
-import org.nanohttpd.protocols.http.NanoHTTPD;
-import org.nanohttpd.protocols.http.response.Response;
-import org.nanohttpd.protocols.http.response.Status;
+import fi.iki.elonen.NanoHTTPD;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -27,7 +24,7 @@ import java.util.Map;
  */
 public class GuestServer extends NanoHTTPD {
 
-    private static final int PORT = 8765;
+    public static final int PORT = 8765;
 
     private final Context context;
     private final HaClient haClient;
@@ -69,7 +66,7 @@ public class GuestServer extends NanoHTTPD {
             return serveAsset(uri.substring(1));
         }
 
-        return Response.newFixedLengthResponse(Status.NOT_FOUND, "text/plain", "Not found");
+        return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found");
     }
 
     // ── Guest UI ──────────────────────────────────────────────────────────────
@@ -77,21 +74,24 @@ public class GuestServer extends NanoHTTPD {
     private Response serveGuestUI(String token) {
         try {
             InputStream is = context.getAssets().open("guest_ui/index.html");
-            String html = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            byte[] bytes = new byte[is.available()];
+            //noinspection ResultOfMethodCallIgnored
+            is.read(bytes);
+            String html = new String(bytes, StandardCharsets.UTF_8);
             // Inject the session token so the JS knows which session it is
             html = html.replace("__GUEST_TOKEN__", token);
-            return Response.newFixedLengthResponse(Status.OK, "text/html", html);
+            return newFixedLengthResponse(Response.Status.OK, "text/html", html);
         } catch (IOException e) {
-            return Response.newFixedLengthResponse(Status.INTERNAL_ERROR, "text/plain", "UI error");
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "UI error");
         }
     }
 
     private Response serveExpired() {
         String html = "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-                + "<h2>🏠 Access expired</h2>"
+                + "<h2>&#127968; Access expired</h2>"
                 + "<p>This guest session has ended. Thank you for your visit!</p>"
                 + "</body></html>";
-        return Response.newFixedLengthResponse(Status.OK, "text/html", html);
+        return newFixedLengthResponse(Response.Status.OK, "text/html", html);
     }
 
     // ── Proxy API ──────────────────────────────────────────────────────────────
@@ -100,12 +100,12 @@ public class GuestServer extends NanoHTTPD {
         // Extract token from header
         String token = session.getHeaders().get("x-guest-token");
         if (token == null) {
-            return jsonError(Status.UNAUTHORIZED, "Missing token");
+            return jsonError(Response.Status.UNAUTHORIZED, "Missing token");
         }
 
         GuestSession gs = sessionStore.findByToken(token);
         if (gs == null || !gs.isValid()) {
-            return jsonError(Status.UNAUTHORIZED, "Session expired");
+            return jsonError(Response.Status.UNAUTHORIZED, "Session expired");
         }
 
         // GET /api/guest/states — returns only allowed entities
@@ -118,23 +118,23 @@ public class GuestServer extends NanoHTTPD {
             return handleCallService(session, gs);
         }
 
-        return jsonError(Status.NOT_FOUND, "Unknown endpoint");
+        return jsonError(Response.Status.NOT_FOUND, "Unknown endpoint");
     }
 
     private Response handleGetStates(GuestSession gs) {
         try {
-            var allStates = haClient.getAllStates();
-            var allowed = new com.google.gson.JsonArray();
-            for (var el : allStates) {
-                var obj = el.getAsJsonObject();
+            com.google.gson.JsonArray allStates = haClient.getAllStates();
+            com.google.gson.JsonArray allowed = new com.google.gson.JsonArray();
+            for (com.google.gson.JsonElement el : allStates) {
+                JsonObject obj = el.getAsJsonObject();
                 String entityId = obj.get("entity_id").getAsString();
-                if (gs.getAllowedEntities().contains(entityId)) {
+                if (gs.getAllowedEntities() != null && gs.getAllowedEntities().contains(entityId)) {
                     allowed.add(obj);
                 }
             }
             return jsonOk(allowed.toString());
         } catch (IOException e) {
-            return jsonError(Status.INTERNAL_ERROR, "HA unreachable");
+            return jsonError(Response.Status.INTERNAL_ERROR, "HA unreachable");
         }
     }
 
@@ -143,15 +143,15 @@ public class GuestServer extends NanoHTTPD {
             Map<String, String> body = new java.util.HashMap<>();
             session.parseBody(body);
             String json = body.get("postData");
-            if (json == null) return jsonError(Status.BAD_REQUEST, "Empty body");
+            if (json == null) return jsonError(Response.Status.BAD_REQUEST, "Empty body");
 
             JsonObject req = gson.fromJson(json, JsonObject.class);
             String entityId = req.get("entity_id").getAsString();
             String service  = req.get("service").getAsString();
 
             // Security: only allowed entities
-            if (!gs.getAllowedEntities().contains(entityId)) {
-                return jsonError(Status.FORBIDDEN, "Entity not allowed");
+            if (gs.getAllowedEntities() == null || !gs.getAllowedEntities().contains(entityId)) {
+                return jsonError(Response.Status.FORBIDDEN, "Entity not allowed");
             }
 
             String domain = entityId.split("\\.")[0];
@@ -160,7 +160,7 @@ public class GuestServer extends NanoHTTPD {
             return jsonOk("{\"success\":" + ok + "}");
 
         } catch (Exception e) {
-            return jsonError(Status.INTERNAL_ERROR, e.getMessage());
+            return jsonError(Response.Status.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -173,20 +173,20 @@ public class GuestServer extends NanoHTTPD {
                     : path.endsWith(".css") ? "text/css"
                     : path.endsWith(".png") ? "image/png"
                     : "text/plain";
-            return Response.newChunkedResponse(Status.OK, mime, is);
+            return newChunkedResponse(Response.Status.OK, mime, is);
         } catch (IOException e) {
-            return Response.newFixedLengthResponse(Status.NOT_FOUND, "text/plain", "Asset not found");
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Asset not found");
         }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private Response jsonOk(String json) {
-        return Response.newFixedLengthResponse(Status.OK, "application/json", json);
+        return newFixedLengthResponse(Response.Status.OK, "application/json", json);
     }
 
-    private Response jsonError(Status status, String message) {
-        return Response.newFixedLengthResponse(status, "application/json",
+    private Response jsonError(Response.Status status, String message) {
+        return newFixedLengthResponse(status, "application/json",
                 "{\"error\":\"" + message + "\"}");
     }
 
